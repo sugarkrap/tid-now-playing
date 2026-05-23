@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">#1B1B1B</color>
+    <string name="app_name">Now Playing</string>
+    <style name="Theme.TidNowPlaying" parent="android:Theme.Material.Light.NoActionBar"/>
+</resources>
