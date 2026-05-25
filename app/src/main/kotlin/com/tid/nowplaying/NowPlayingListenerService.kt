@@ -8,21 +8,19 @@ import android.media.session.MediaController
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.service.notification.NotificationListenerService
+import androidx.car.app.connection.CarConnection
 import androidx.core.app.NotificationCompat
+import androidx.lifecycle.Observer
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private const val TAG = "NowPlayingListener"
 private const val CHANNEL_ID = "now_playing"
 private const val NOTIF_ID = 1
-
-private val IDLE_TEXTS = listOf(
-    "Welcome to your Opel",
-    "Opel, wir liben autos",
-    "Zoom zoom Opel",
-    "Opel Corsa Comfort",
-    "Opel Corsa C 1.2L",
-    "Have fun on the road!",
-    "Off to a joyride?",
-)
 
 class NowPlayingListenerService : NotificationListenerService() {
 
@@ -30,7 +28,8 @@ class NowPlayingListenerService : NotificationListenerService() {
         getSystemService(NOTIFICATION_SERVICE) as NotificationManager
     }
 
-    private lateinit var tidSerial: TidSerialManager
+    // Shared serial manager owned by TidApplication — do NOT call connect/disconnect here.
+    private val tidSerial get() = (application as TidApplication).serialManager
 
     private val mediaSessionManager by lazy {
         getSystemService(MEDIA_SESSION_SERVICE) as MediaSessionManager
@@ -40,9 +39,17 @@ class NowPlayingListenerService : NotificationListenerService() {
         ComponentName(this, NowPlayingListenerService::class.java)
     }
 
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val activeControllers = mutableListOf<MediaController>()
     private var lastSentDisplayText: String? = null
-    private var currentIdleText: String = IDLE_TEXTS.random()
+
+    private val carConnection by lazy { CarConnection(this) }
+    private val carConnectionObserver = Observer<Int> { type ->
+        when (type) {
+            CarConnection.CONNECTION_TYPE_PROJECTION -> logD(TAG, "Android Auto connected (wireless)")
+            CarConnection.CONNECTION_TYPE_NOT_CONNECTED -> logD(TAG, "Android Auto disconnected")
+        }
+    }
 
     private val mediaCallback = object : MediaController.Callback() {
         override fun onMetadataChanged(metadata: MediaMetadata?) = refreshNowPlaying()
@@ -56,18 +63,31 @@ class NowPlayingListenerService : NotificationListenerService() {
 
     override fun onCreate() {
         super.onCreate()
-        tidSerial = TidSerialManager(this)
-        tidSerial.onPortReady = {
-            // Force re-evaluation so the current state is sent over the newly opened port
-            lastSentDisplayText = null
-            refreshNowPlaying()
+        carConnection.type.observeForever(carConnectionObserver)
+        // Re-send current state whenever the port (re)opens.
+        scope.launch {
+            UsbStatusRepository.status.collect { status ->
+                if (status is UsbStatus.Ready) {
+                    lastSentDisplayText = null
+                    refreshNowPlaying()
+                }
+            }
         }
-        tidSerial.connect()
+        // Keep the Arduino's idle timer alive while content is actively displayed.
+        scope.launch {
+            while (true) {
+                delay(20_000)
+                if (lastSentDisplayText != null) {
+                    tidSerial.send("keepalive\n")
+                }
+            }
+        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        tidSerial.disconnect()
+        carConnection.type.removeObserver(carConnectionObserver)
+        scope.cancel()
     }
 
     override fun onListenerConnected() {
@@ -115,7 +135,13 @@ class NowPlayingListenerService : NotificationListenerService() {
             .firstOrNull { it.playbackState?.state == PlaybackState.STATE_PLAYING }
         val pausedController = activeControllers
             .firstOrNull { it.playbackState?.state == PlaybackState.STATE_PAUSED }
-        val info = playingController?.metadata?.toNowPlayingInfo()
+
+        // ZLink / Android Auto proxy sessions have null PlaybackState during active playback;
+        // fall back to any session that at least has a title.
+        val metadataFallbackController = activeControllers
+            .firstOrNull { it.playbackState == null && it.metadata?.getString(MediaMetadata.METADATA_KEY_TITLE) != null }
+
+        val info = (playingController ?: metadataFallbackController)?.metadata?.toNowPlayingInfo()
         NowPlayingRepository.update(info)
 
         val displayText = info?.displayText
@@ -130,16 +156,8 @@ class NowPlayingListenerService : NotificationListenerService() {
                 lastSentDisplayText = pausedText
                 tidSerial.send("$pausedText\n")
             }
-        } else {
-            // Only pick a new random idle text when transitioning from playing/paused to idle
-            if (lastSentDisplayText != null && lastSentDisplayText !in IDLE_TEXTS) {
-                currentIdleText = IDLE_TEXTS.random()
-            }
-            if (currentIdleText != lastSentDisplayText) {
-                lastSentDisplayText = currentIdleText
-                tidSerial.send("$currentIdleText\n")
-            }
         }
+        // Idle: send nothing — the Arduino handles idle phrases autonomously.
 
         if (info != null) {
             val notification = NotificationCompat.Builder(this, CHANNEL_ID)

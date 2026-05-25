@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -47,6 +49,37 @@ android {
     }
 }
 
+val localProps = Properties().apply {
+    rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
+}
+val firmwareProjectDir = localProps.getProperty("firmware.dir")
+val pio = "/home/vodkannelle/.platformio/penv/bin/pio"
+val firmwareBoards = listOf("nano", "uno")
+val firmwareAssetsDir = file("src/main/assets/firmware")
+
+tasks.register("compileFirmware") {
+    onlyIf { firmwareProjectDir != null }
+    inputs.dir("$firmwareProjectDir/src")
+    inputs.file("$firmwareProjectDir/platformio.ini")
+    outputs.files(firmwareBoards.map { file("$firmwareAssetsDir/$it.hex") })
+    doLast {
+        firmwareAssetsDir.mkdirs()
+        exec {
+            workingDir = file(firmwareProjectDir!!)
+            commandLine(pio, "run", *firmwareBoards.flatMap { listOf("-e", it) }.toTypedArray())
+        }
+        firmwareBoards.forEach { env ->
+            copy {
+                from(file("$firmwareProjectDir/.pio/build/$env/firmware.hex"))
+                into(firmwareAssetsDir)
+                rename { "$env.hex" }
+            }
+        }
+    }
+}
+
+tasks.named("preBuild") { dependsOn("compileFirmware") }
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
@@ -58,5 +91,6 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
     implementation("com.github.mik3y:usb-serial-for-android:3.10.0")
+    implementation("androidx.car.app:app:1.4.0")
     debugImplementation(libs.androidx.ui.tooling)
 }

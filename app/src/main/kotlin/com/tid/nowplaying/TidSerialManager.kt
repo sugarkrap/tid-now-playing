@@ -19,8 +19,11 @@ class TidSerialManager(private val context: Context) {
 
     private val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
     private val executor = Executors.newSingleThreadExecutor()
-    private var port: UsbSerialPort? = null
+    internal var port: UsbSerialPort? = null
     var onPortReady: (() -> Unit)? = null
+
+    @Volatile private var readLoopActive = false
+    private var readThread: Thread? = null
 
     private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -85,6 +88,70 @@ class TidSerialManager(private val context: Context) {
         }
     }
 
+    fun queryFirmwareVersion(): String? {
+        val p = port ?: return null
+        stopReadLoop()
+        try {
+            p.write("version\n".toByteArray(), 500)
+            val sb = StringBuilder()
+            val deadline = System.currentTimeMillis() + 1500L
+            while (true) {
+                val remaining = deadline - System.currentTimeMillis()
+                if (remaining <= 0) return null
+                val buf = ByteArray(32)
+                val n = try { p.read(buf, remaining.coerceAtLeast(1).toInt()) } catch (_: Exception) { return null }
+                if (n > 0) {
+                    for (i in 0 until n) {
+                        val c = buf[i].toInt().toChar()
+                        if (c == '\n' || c == '\r') {
+                            val result = sb.toString().trim()
+                            if (result.isNotEmpty()) return result
+                        } else {
+                            sb.append(c)
+                        }
+                    }
+                }
+            }
+        } finally {
+            port?.let { startReadLoop(it) }
+        }
+    }
+
+    internal fun startReadLoop(p: UsbSerialPort) {
+        readLoopActive = true
+        readThread = Thread {
+            val buf = ByteArray(64)
+            val sb = StringBuilder()
+            while (readLoopActive) {
+                try {
+                    val n = p.read(buf, 200)
+                    if (n > 0) {
+                        for (i in 0 until n) {
+                            val c = buf[i].toInt().toChar()
+                            if (c == '\n' || c == '\r') {
+                                val line = sb.toString().trim()
+                                if (line.isNotEmpty()) logD(TAG, "← $line")
+                                sb.clear()
+                            } else {
+                                sb.append(c)
+                            }
+                        }
+                    }
+                } catch (_: Exception) {
+                    if (!readLoopActive) break
+                }
+            }
+        }.also { it.isDaemon = true; it.start() }
+    }
+
+    internal fun stopReadLoop() {
+        if (!readLoopActive) return
+        readLoopActive = false
+        readThread?.interrupt()
+        readThread?.join(500)
+        readThread = null
+    }
+
     private fun connectDevice(device: UsbDevice) {
         if (usbManager.hasPermission(device)) {
             openPort(device)
@@ -126,7 +193,6 @@ class TidSerialManager(private val context: Context) {
                     )
                 )
                 Log.d(TAG, "Serial port opened — ${device.productName} (${device.vendorId.hex}:${device.productId.hex})")
-                // Wait for Arduino to finish rebooting after DTR assertion
                 Thread.sleep(500)
                 UsbStatusRepository.update(
                     UsbStatus.Ready(
@@ -135,6 +201,7 @@ class TidSerialManager(private val context: Context) {
                         productId = device.productId,
                     )
                 )
+                startReadLoop(p)
                 onPortReady?.invoke()
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to open port: ${e.message}")
@@ -145,6 +212,7 @@ class TidSerialManager(private val context: Context) {
 
     private fun closePort() {
         executor.execute {
+            stopReadLoop()
             try { port?.close() } catch (_: Exception) {}
             port = null
             Log.d(TAG, "Serial port closed")
