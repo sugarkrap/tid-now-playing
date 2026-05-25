@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Arduino Nano (CH340): 0x1A86:0x7523 -->
+    <usb-device vendor-id="6790" product-id="30003" />
+    <!-- Arduino Nano (FTDI, older): 0x0403:0x6001 -->
+    <usb-device vendor-id="1027" product-id="24577" />
+</resources>

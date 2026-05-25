@@ -2,13 +2,19 @@
 set -euo pipefail
 
 ANDROID_HOME="${ANDROID_HOME:-/opt/android-sdk}"
-ANDROID_AVD_HOME="${ANDROID_AVD_HOME:-$HOME/.config/.android/avd}"
 ADB="$ANDROID_HOME/platform-tools/adb"
-EMULATOR="$ANDROID_HOME/emulator/emulator"
-AVD="tid_now_playing"
 APK="app/build/outputs/apk/debug/app-debug.apk"
 PACKAGE="com.tid.nowplaying"
 ACTIVITY="$PACKAGE/.MainActivity"
+
+# ── device target ────────────────────────────────────────────────────────────
+
+# If the first argument looks like host:port, use it as the network ADB target
+DEVICE_ADDR=""
+if [[ "${1:-}" =~ ^[0-9a-zA-Z._-]+:[0-9]+$ ]]; then
+    DEVICE_ADDR="$1"
+    shift
+fi
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -16,47 +22,40 @@ log()  { printf '\e[1;34m▶\e[0m %s\n' "$*"; }
 ok()   { printf '\e[1;32m✔\e[0m %s\n' "$*"; }
 err()  { printf '\e[1;31m✖\e[0m %s\n' "$*" >&2; exit 1; }
 
-emulator_serial() {
-    "$ADB" devices | awk '/emulator-[0-9]+\tdevice/{print $1; exit}'
+device_serial() {
+    if [[ -n "$DEVICE_ADDR" ]]; then
+        echo "$DEVICE_ADDR"
+        return
+    fi
+    "$ADB" devices | awk '/\tdevice$/ && !/emulator/{print $1; exit}'
 }
 
-emulator_running() {
-    [[ -n "$(emulator_serial)" ]]
-}
-
-wait_for_boot() {
-    local serial=$1
-    log "Waiting for boot to complete…"
-    "$ADB" -s "$serial" wait-for-device
-    until [[ "$("$ADB" -s "$serial" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == "1" ]]; do
-        sleep 2
-    done
-    ok "Device ready ($serial)"
+require_device() {
+    if [[ -n "$DEVICE_ADDR" ]]; then
+        log "Connecting to $DEVICE_ADDR…" >&2
+        "$ADB" connect "$DEVICE_ADDR" | grep -q "connected" \
+            || err "Could not connect to $DEVICE_ADDR"
+        ok "Connected to $DEVICE_ADDR" >&2
+        echo "$DEVICE_ADDR"
+        return
+    fi
+    local serial
+    serial=$(device_serial)
+    [[ -n "$serial" ]] || err "No physical device connected (run: adb devices)"
+    echo "$serial"
 }
 
 # ── commands ─────────────────────────────────────────────────────────────────
 
-cmd_emulator() {
-    if emulator_running; then
-        ok "Emulator already running ($(emulator_serial))"
-        return
-    fi
-    log "Starting emulator ($AVD)…"
-    ANDROID_AVD_HOME="$ANDROID_AVD_HOME" \
-        "$EMULATOR" -avd "$AVD" -no-audio -gpu swiftshader_indirect \
-        >/tmp/emulator-"$AVD".log 2>&1 &
-    disown
-    # Give it a moment to register with adb
-    sleep 3
-    "$ADB" start-server >/dev/null 2>&1
-    local serial
-    for i in $(seq 1 15); do
-        serial=$(emulator_serial)
-        [[ -n "$serial" ]] && break
-        sleep 2
-    done
-    [[ -n "$serial" ]] || err "Emulator didn't appear in adb devices after 30s"
-    wait_for_boot "$serial"
+cmd_pair() {
+    local addr="${1:-}"
+    [[ -n "$addr" ]] || err "Usage: $0 pair <host:port>"
+    printf 'Pairing code: '
+    local code
+    read -r code
+    [[ -n "$code" ]] || err "No pairing code entered"
+    "$ADB" pair "$addr" "$code" || err "Pairing failed"
+    ok "Paired with $addr — you can now connect with: $0 <connect-host:port>"
 }
 
 cmd_build() {
@@ -66,9 +65,8 @@ cmd_build() {
 }
 
 cmd_install() {
-    cmd_emulator
     local serial
-    serial=$(emulator_serial)
+    serial=$(require_device)
     log "Installing on $serial…"
     "$ADB" -s "$serial" install -r "$APK"
     ok "Installed $PACKAGE"
@@ -76,8 +74,8 @@ cmd_install() {
 
 cmd_launch() {
     local serial
-    serial=$(emulator_serial) || err "No emulator running"
-    log "Launching $ACTIVITY…"
+    serial=$(require_device)
+    log "Launching $ACTIVITY on $serial…"
     "$ADB" -s "$serial" shell am start -n "$ACTIVITY"
 }
 
@@ -89,14 +87,14 @@ cmd_run() {
 
 cmd_logcat() {
     local serial
-    serial=$(emulator_serial) || err "No emulator running"
+    serial=$(require_device)
     "$ADB" -s "$serial" logcat --pid="$("$ADB" -s "$serial" shell pidof "$PACKAGE" | tr -d '\r')"
 }
 
 cmd_watch() {
     local debounce=${WATCH_DEBOUNCE:-30}
     command -v inotifywait >/dev/null 2>&1 || err "inotifywait not found — install inotify-tools"
-    cmd_emulator
+    require_device >/dev/null
     log "Watching for changes (debounce ${debounce}s)…"
     local timer_pid=""
     while read -r _dir _event _file < <(
@@ -105,7 +103,6 @@ cmd_watch() {
             -e close_write -e moved_to \
             app/src app/build.gradle.kts build.gradle.kts 2>/dev/null
     ); do
-        # Reset debounce timer
         if [[ -n "$timer_pid" ]] && kill -0 "$timer_pid" 2>/dev/null; then
             kill "$timer_pid" 2>/dev/null
         fi
@@ -117,12 +114,12 @@ cmd_watch() {
 # ── dispatch ─────────────────────────────────────────────────────────────────
 
 case "${1:-run}" in
-    emulator) cmd_emulator ;;
-    build)    cmd_build    ;;
-    install)  cmd_install  ;;
-    launch)   cmd_launch   ;;
-    run)      cmd_run      ;;
-    logcat)   cmd_logcat   ;;
-    watch)    cmd_watch    ;;
-    *)        err "Usage: $0 [emulator|build|install|launch|run|logcat|watch]" ;;
+    pair)    cmd_pair "${2:-}"  ;;
+    build)   cmd_build          ;;
+    install) cmd_install        ;;
+    launch)  cmd_launch         ;;
+    run)     cmd_run            ;;
+    logcat)  cmd_logcat         ;;
+    watch)   cmd_watch          ;;
+    *)       err "Usage: $0 pair <host:port> | [host:port] [build|install|launch|run|logcat|watch]" ;;
 esac
