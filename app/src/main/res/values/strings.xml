@@ -1,4 +1,58 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Now Playing</string>
+    <string name="app_name">TID Companion</string>
+
+    <!-- Tabs -->
+    <string name="tab_home">Home</string>
+    <string name="tab_debug">Debug</string>
+    <string name="tab_settings">Settings</string>
+
+    <!-- Home tab -->
+    <string name="permission_required">Notification access is required to read media sessions.</string>
+    <string name="btn_grant_access">Grant Access</string>
+    <string name="nothing_active">Nothing active</string>
+    <string name="card_navigation">Navigation</string>
+    <string name="card_media">Media</string>
+    <string name="unknown_title">Unknown title</string>
+    <string name="time_left_hm">%1$dh%2$02d left</string>
+    <string name="time_left_m">%1$dmin left</string>
+    <string name="time_left_less_1min">&lt; 1min left</string>
+
+    <!-- USB / Debug tab -->
+    <string name="usb_section_label">OTG / Serial</string>
+    <string name="usb_no_device">No USB device</string>
+    <string name="usb_awaiting_permission">Awaiting permission…</string>
+    <string name="usb_detail_connected">%1$s:%2$s — connected, sending…</string>
+    <string name="usb_detail_ready">%1$s:%2$s — ready</string>
+    <string name="usb_error">USB error</string>
+    <string name="usb_last_sent">→ %1$s</string>
+    <string name="board_selector_label">Target board</string>
+    <string name="btn_check_version">Check version</string>
+    <string name="btn_flash">Flash now</string>
+    <string name="btn_send_random">Send random</string>
+    <string name="flash_working">Working…</string>
+    <string name="btn_grant_usb">Grant USB Permission</string>
+    <string name="debug_logs_label">Debug logs</string>
+    <string name="btn_clear">Clear</string>
+
+    <!-- Settings tab -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_language_label">App language</string>
+    <string name="settings_language_system">System default</string>
+    <string name="settings_connection_logs_label">Show TID connection logs</string>
+    <string name="settings_connection_logs_desc">Log TID connected / TID lost events in the debug view</string>
+    <string name="settings_cycling_label">Cycle through info on TID</string>
+    <string name="settings_cycling_desc">When enabled, nav rotates with media and trip time. When off (default), highest priority only.</string>
+
+    <!-- TID display strings (ASCII only — 7-bit VFD display, 10-char wide) -->
+    <string name="tid_paused">Paused</string>
+    <string name="tid_nav_with_distance">%1$s in %2$dm</string>
+    <!-- Action abbreviations for compact 10-char nav format -->
+    <string name="tid_abbrev_turn">Turn</string>
+    <string name="tid_abbrev_uturn">U-turn</string>
+    <string name="tid_abbrev_ramp">Ramp</string>
+    <string name="tid_abbrev_roundabout">Rbt.</string>
+    <string name="tid_abbrev_straight">Str.</string>
+    <string name="tid_abbrev_destination">Dest.</string>
+    <string name="tid_abbrev_depart">Dep.</string>
 </resources>

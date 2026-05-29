@@ -14,8 +14,8 @@ android {
         applicationId = "com.tid.nowplaying"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
     }
 
     signingConfigs {
@@ -46,34 +46,54 @@ android {
     }
     buildFeatures {
         compose = true
+        aidl = true
     }
 }
 
 val localProps = Properties().apply {
     rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
 }
-val firmwareProjectDir = localProps.getProperty("firmware.dir")
-val pio = "/home/vodkannelle/.platformio/penv/bin/pio"
-val firmwareBoards = listOf("nano", "uno")
+// Default to the submodule at firmware/; override with firmware.dir in local.properties.
+val firmwareProjectDir = localProps.getProperty("firmware.dir") ?: "firmware"
+val firmwareProject = rootProject.file(firmwareProjectDir).takeIf { it.exists() && it.isDirectory }
+// Override with pio.path in local.properties; fallback to pio on PATH (used in CI).
+val pio = localProps.getProperty("pio.path") ?: "pio"
+val firmwareBoards = listOf("nano", "uno", "micro", "nano_diag")
 val firmwareAssetsDir = file("src/main/assets/firmware")
 
 tasks.register("compileFirmware") {
-    onlyIf { firmwareProjectDir != null }
-    inputs.dir("$firmwareProjectDir/src")
-    inputs.file("$firmwareProjectDir/platformio.ini")
-    outputs.files(firmwareBoards.map { file("$firmwareAssetsDir/$it.hex") })
+    onlyIf { firmwareProject != null }
+    if (firmwareProject != null) {
+        inputs.dir(file("$firmwareProject/src"))
+        inputs.file(file("$firmwareProject/platformio.ini"))
+        outputs.files(firmwareBoards.map { file("$firmwareAssetsDir/$it.hex") })
+    }
     doLast {
         firmwareAssetsDir.mkdirs()
-        exec {
-            workingDir = file(firmwareProjectDir!!)
-            commandLine(pio, "run", *firmwareBoards.flatMap { listOf("-e", it) }.toTypedArray())
-        }
+        val failed = mutableListOf<String>()
         firmwareBoards.forEach { env ->
-            copy {
-                from(file("$firmwareProjectDir/.pio/build/$env/firmware.hex"))
-                into(firmwareAssetsDir)
-                rename { "$env.hex" }
+            try {
+                exec {
+                    workingDir = firmwareProject!!
+                    commandLine(pio, "run", "-e", env)
+                    isIgnoreExitValue = true
+                }.also { result ->
+                    if (result.exitValue != 0) {
+                        failed.add(env)
+                    } else {
+                        copy {
+                            from(file("$firmwareProject/.pio/build/$env/firmware.hex"))
+                            into(firmwareAssetsDir)
+                            rename { "$env.hex" }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                failed.add(env)
             }
+        }
+        if (failed.isNotEmpty()) {
+            throw GradleException("Firmware build failed for: ${failed.joinToString(", ")}")
         }
     }
 }
@@ -90,7 +110,8 @@ dependencies {
     implementation(libs.androidx.ui.graphics)
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
+    implementation("androidx.compose.material:material-icons-extended")
     implementation("com.github.mik3y:usb-serial-for-android:3.10.0")
-    implementation("androidx.car.app:app:1.4.0")
+    implementation("androidx.datastore:datastore-preferences:1.1.1")
     debugImplementation(libs.androidx.ui.tooling)
 }

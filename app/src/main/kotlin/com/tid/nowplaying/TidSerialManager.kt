@@ -10,6 +10,7 @@ import android.hardware.usb.UsbManager
 import android.util.Log
 import com.hoho.android.usbserial.driver.UsbSerialPort
 import com.hoho.android.usbserial.driver.UsbSerialProber
+import java.text.Normalizer
 import java.util.concurrent.Executors
 
 private const val TAG = "TidSerialManager"
@@ -43,6 +44,7 @@ class TidSerialManager(private val context: Context) {
                 }
                 UsbManager.ACTION_USB_DEVICE_DETACHED -> {
                     Log.d(TAG, "USB device detached")
+                    if (AppSettings.showConnectionLogs) logD(TAG, "TID lost")
                     UsbStatusRepository.update(UsbStatus.Disconnected)
                     closePort()
                 }
@@ -80,8 +82,9 @@ class TidSerialManager(private val context: Context) {
         executor.execute {
             val p = port ?: return@execute
             try {
-                p.write(text.toByteArray(), 2000)
-                SerialLogRepository.logSent(text)
+                val ascii = text.toAscii()
+                p.write(ascii.toByteArray(Charsets.US_ASCII), 2000)
+                SerialLogRepository.logSent(ascii)
             } catch (e: Exception) {
                 Log.e(TAG, "Write failed: ${e.message}")
             }
@@ -130,7 +133,7 @@ class TidSerialManager(private val context: Context) {
                             val c = buf[i].toInt().toChar()
                             if (c == '\n' || c == '\r') {
                                 val line = sb.toString().trim()
-                                if (line.isNotEmpty()) logD(TAG, "← $line")
+                                if (line.isNotEmpty() && AppSettings.showConnectionLogs) logD(TAG, "← $line")
                                 sb.clear()
                             } else {
                                 sb.append(c)
@@ -193,6 +196,7 @@ class TidSerialManager(private val context: Context) {
                     )
                 )
                 Log.d(TAG, "Serial port opened — ${device.productName} (${device.vendorId.hex}:${device.productId.hex})")
+                if (AppSettings.showConnectionLogs) logD(TAG, "TID connected — ${device.productName}")
                 Thread.sleep(500)
                 UsbStatusRepository.update(
                     UsbStatus.Ready(
@@ -218,6 +222,15 @@ class TidSerialManager(private val context: Context) {
             Log.d(TAG, "Serial port closed")
         }
     }
+}
+
+private fun String.stripAccents(): String {
+    val normalized = Normalizer.normalize(this, Normalizer.Form.NFD)
+    return normalized.replace(Regex("\\p{InCombiningDiacriticalMarks}+"), "")
+}
+
+private fun String.toAscii(): String {
+    return stripAccents().filter { it.code in 32..126 || it == '\n' || it == '\r' }
 }
 
 private val Int.hex get() = "0x%04X".format(this)

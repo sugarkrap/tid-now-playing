@@ -1,0 +1,75 @@
+name: Build Release APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to attach the APK to (e.g. v1.2)'
+        required: false
+
+jobs:
+  build:
+    runs-on: external
+    container:
+      image: alvrme/alpine-android:android-36-jdk21
+
+    steps:
+      - name: Install Node.js
+        run: apk add --no-cache nodejs
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Cache Gradle
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('**/*.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v3
+        with:
+          path: ~/.platformio
+          key: pio-${{ hashFiles('firmware/platformio.ini') }}
+          restore-keys: pio-
+
+      - name: Install PlatformIO
+        run: |
+          apk add --no-cache python3 py3-pip
+          pip3 install platformio --break-system-packages
+
+      - name: Build release APK
+        run: ./gradlew assembleRelease --no-daemon
+
+      - name: Upload APK to release
+        if: startsWith(github.ref, 'refs/tags/') || inputs.tag != ''
+        run: |
+          apk add --no-cache curl jq
+
+          TAG="${{ inputs.tag || github.ref_name }}"
+          APK="app/build/outputs/apk/release/app-release.apk"
+          API="${{ github.server_url }}/api/v1/repos/${{ github.repository }}"
+          AUTH="Authorization: token ${{ github.token }}"
+
+          # Use existing release if present, otherwise create one
+          RELEASE_ID=$(curl -sf -H "$AUTH" "$API/releases/tags/$TAG" | jq -r '.id // empty')
+
+          if [ -z "$RELEASE_ID" ]; then
+            RELEASE_ID=$(curl -sf -X POST \
+              -H "$AUTH" -H "Content-Type: application/json" \
+              "$API/releases" \
+              -d "{\"tag_name\":\"$TAG\",\"name\":\"$TAG\",\"draft\":false}" \
+              | jq -r '.id')
+          fi
+
+          curl -sf -X POST \
+            -H "$AUTH" \
+            "$API/releases/$RELEASE_ID/assets?name=tid-companion-$TAG.apk" \
+            -F "attachment=@$APK"
