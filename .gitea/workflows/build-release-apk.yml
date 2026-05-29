@@ -12,7 +12,7 @@ on:
 
 jobs:
   build:
-    runs-on: external
+    runs-on: default
     container:
       image: alvrme/alpine-android:android-36-jdk21
 
