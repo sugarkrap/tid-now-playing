@@ -20,6 +20,9 @@ jobs:
       - name: Install Node.js
         run: apk add --no-cache nodejs
 
+      - name: Configure git credentials
+        run: git config --global url."https://oauth2:${{ secrets.GIT_TOKEN }}@pod-042.pwet.pl".insteadOf "https://pod-042.pwet.pl"
+
       - uses: actions/checkout@v4
         with:
           submodules: true

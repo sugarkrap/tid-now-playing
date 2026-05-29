@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C /mnt/data/Code/tid-now-playing status)",
+      "Bash(git -C /mnt/data/Code/tid-now-playing diff HEAD -- .gitmodules)"
+    ]
+  }
+}
